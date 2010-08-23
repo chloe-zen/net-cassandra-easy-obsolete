@@ -1,0 +1,54 @@
+Revision history for Perl module Net::Cassandra::Easy:
+
+TODO    - cassidy.pl: do standard families, handle commas and spaces, accumulate return lists over 100 items, docs
+
+0.15 Thu May 13 01::00:00 GMT 2010
+    - apply THRIFT-758 patch for better exceptions
+    - catch up with SVN trunk
+
+0.14 Thu Apr 15 01::00:00 GMT 2010
+    - catch up with new Thrift interface (no keyspace arguments anymore)
+
+0.13 Thu Apr 15 01::00:00 GMT 2010
+    - unreleased due to bugs
+
+0.12 Thu Apr 15 01::00:00 GMT 2010
+    - cassidy.pl can add/rename/delete keyspaces and column families
+
+0.11 Mon Apr 12 01::00:00 GMT 2010
+    - genthrift.pl will fetch and use the latest cassandra.thrift
+    - new configure() method to add/rename/delete keyspaces and column families
+
+0.10 Fri Apr 09 01::00:00 GMT 2010
+    - fix timestamps so they are 0-padded on the microseconds
+
+0.09 Tue Apr 06 01::00:00 GMT 2010
+    - support deletions in non-super CFs
+
+0.08 Thu Mar 31 01::00:00 GMT 2010
+    - cassidy.pl: fix insertion into non-LongType families bug
+    - cassidy.pl: ignore standard families (TODO for later but it's not trivial)
+
+0.07 Thu Mar 31 00::00:00 GMT 2010
+    - released with cassidy.pl
+
+0.06 Fri Mar 19 01::00:00 GMT 2010
+    - validate insertion hash: no undef values allowed
+    - add CLI in cassidy.pl (tab completion, simple get/insert/delete/describe)
+    - add describe_keyspace interface with desc()
+    - check that the client was connect()ed on get() and mutate() calls
+    - add N::C::E::QUIET to silence login() info
+    - add keys()
+    - bitmasks support in N::C::Easy get()
+
+0.05 Fri Mar 19 00::00:00 GMT 2010
+    - make timestamps configurable and default them to Time::HiRes::gettimeofday() microseconds
+
+0.04 Thu Mar 18 00::00:00 GMT 2010
+    - use microseconds for the timestamps
+
+0.03 Mon Mar 15 00::00:00 GMT 2010
+    - doc fixes
+
+0.02 Fri Mar 12 00::00:00 GMT 2010
+    - inital release
