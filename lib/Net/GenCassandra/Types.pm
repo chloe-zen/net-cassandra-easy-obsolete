@@ -16,14 +16,86 @@ use constant DCQUORUM => 3;
 use constant DCQUORUMSYNC => 4;
 use constant ALL => 5;
 use constant ANY => 6;
+package Net::GenCassandra::IndexOperator;
+use constant EQ => 0;
+use constant GTE => 1;
+use constant GT => 2;
+use constant LTE => 3;
+use constant LT => 4;
 package Net::GenCassandra::AccessLevel;
 use constant NONE => 0;
 use constant READONLY => 16;
 use constant READWRITE => 32;
 use constant FULL => 64;
+package Net::GenCassandra::IndexType;
+use constant KEYS => 0;
+package Net::GenCassandra::Clock;
+use base qw(Class::Accessor);
+Net::GenCassandra::Clock->mk_accessors( qw( timestamp ) );
+
+sub new {
+  my $classname = shift;
+  my $self      = {};
+  my $vals      = shift || {};
+  $self->{timestamp} = undef;
+  if (UNIVERSAL::isa($vals,'HASH')) {
+    if (defined $vals->{timestamp}) {
+      $self->{timestamp} = $vals->{timestamp};
+    }
+  }
+  return bless ($self, $classname);
+}
+
+sub getName {
+  return 'Clock';
+}
+
+sub read {
+  my ($self, $input) = @_;
+  my $xfer  = 0;
+  my $fname;
+  my $ftype = 0;
+  my $fid   = 0;
+  $xfer += $input->readStructBegin(\$fname);
+  while (1) 
+  {
+    $xfer += $input->readFieldBegin(\$fname, \$ftype, \$fid);
+    if ($ftype == TType::STOP) {
+      last;
+    }
+    SWITCH: for($fid)
+    {
+      /^1$/ && do{      if ($ftype == TType::I64) {
+        $xfer += $input->readI64(\$self->{timestamp});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+        $xfer += $input->skip($ftype);
+    }
+    $xfer += $input->readFieldEnd();
+  }
+  $xfer += $input->readStructEnd();
+  return $xfer;
+}
+
+sub write {
+  my ($self, $output) = @_;
+  my $xfer   = 0;
+  $xfer += $output->writeStructBegin('Clock');
+  if (defined $self->{timestamp}) {
+    $xfer += $output->writeFieldBegin('timestamp', TType::I64, 1);
+    $xfer += $output->writeI64($self->{timestamp});
+    $xfer += $output->writeFieldEnd();
+  }
+  $xfer += $output->writeFieldStop();
+  $xfer += $output->writeStructEnd();
+  return $xfer;
+}
+
 package Net::GenCassandra::Column;
 use base qw(Class::Accessor);
-Net::GenCassandra::Column->mk_accessors( qw( name value timestamp ttl ) );
+Net::GenCassandra::Column->mk_accessors( qw( name value clock ttl ) );
 
 sub new {
   my $classname = shift;
@@ -31,7 +103,7 @@ sub new {
   my $vals      = shift || {};
   $self->{name} = undef;
   $self->{value} = undef;
-  $self->{timestamp} = undef;
+  $self->{clock} = undef;
   $self->{ttl} = undef;
   if (UNIVERSAL::isa($vals,'HASH')) {
     if (defined $vals->{name}) {
@@ -40,8 +112,8 @@ sub new {
     if (defined $vals->{value}) {
       $self->{value} = $vals->{value};
     }
-    if (defined $vals->{timestamp}) {
-      $self->{timestamp} = $vals->{timestamp};
+    if (defined $vals->{clock}) {
+      $self->{clock} = $vals->{clock};
     }
     if (defined $vals->{ttl}) {
       $self->{ttl} = $vals->{ttl};
@@ -81,8 +153,9 @@ sub read {
         $xfer += $input->skip($ftype);
       }
       last; };
-      /^3$/ && do{      if ($ftype == TType::I64) {
-        $xfer += $input->readI64(\$self->{timestamp});
+      /^3$/ && do{      if ($ftype == TType::STRUCT) {
+        $self->{clock} = new Net::GenCassandra::Clock();
+        $xfer += $self->{clock}->read($input);
       } else {
         $xfer += $input->skip($ftype);
       }
@@ -115,9 +188,9 @@ sub write {
     $xfer += $output->writeString($self->{value});
     $xfer += $output->writeFieldEnd();
   }
-  if (defined $self->{timestamp}) {
-    $xfer += $output->writeFieldBegin('timestamp', TType::I64, 3);
-    $xfer += $output->writeI64($self->{timestamp});
+  if (defined $self->{clock}) {
+    $xfer += $output->writeFieldBegin('clock', TType::STRUCT, 3);
+    $xfer += $self->{clock}->write($output);
     $xfer += $output->writeFieldEnd();
   }
   if (defined $self->{ttl}) {
@@ -215,14 +288,14 @@ sub write {
   if (defined $self->{columns}) {
     $xfer += $output->writeFieldBegin('columns', TType::LIST, 2);
     {
-      $output->writeListBegin(TType::STRUCT, scalar(@{$self->{columns}}));
+      $xfer += $output->writeListBegin(TType::STRUCT, scalar(@{$self->{columns}}));
       {
         foreach my $iter6 (@{$self->{columns}}) 
         {
           $xfer += ${iter6}->write($output);
         }
       }
-      $output->writeListEnd();
+      $xfer += $output->writeListEnd();
     }
     $xfer += $output->writeFieldEnd();
   }
@@ -823,7 +896,7 @@ sub write {
 
 package Net::GenCassandra::SliceRange;
 use base qw(Class::Accessor);
-Net::GenCassandra::SliceRange->mk_accessors( qw( start finish reversed count bitmasks ) );
+Net::GenCassandra::SliceRange->mk_accessors( qw( start finish reversed count ) );
 
 sub new {
   my $classname = shift;
@@ -833,7 +906,6 @@ sub new {
   $self->{finish} = undef;
   $self->{reversed} = 0;
   $self->{count} = 100;
-  $self->{bitmasks} = undef;
   if (UNIVERSAL::isa($vals,'HASH')) {
     if (defined $vals->{start}) {
       $self->{start} = $vals->{start};
@@ -846,9 +918,6 @@ sub new {
     }
     if (defined $vals->{count}) {
       $self->{count} = $vals->{count};
-    }
-    if (defined $vals->{bitmasks}) {
-      $self->{bitmasks} = $vals->{bitmasks};
     }
   }
   return bless ($self, $classname);
@@ -897,24 +966,6 @@ sub read {
         $xfer += $input->skip($ftype);
       }
       last; };
-      /^5$/ && do{      if ($ftype == TType::LIST) {
-        {
-          my $_size7 = 0;
-          $self->{bitmasks} = [];
-          my $_etype10 = 0;
-          $xfer += $input->readListBegin(\$_etype10, \$_size7);
-          for (my $_i11 = 0; $_i11 < $_size7; ++$_i11)
-          {
-            my $elem12 = undef;
-            $xfer += $input->readString(\$elem12);
-            push(@{$self->{bitmasks}},$elem12);
-          }
-          $xfer += $input->readListEnd();
-        }
-      } else {
-        $xfer += $input->skip($ftype);
-      }
-      last; };
         $xfer += $input->skip($ftype);
     }
     $xfer += $input->readFieldEnd();
@@ -945,20 +996,6 @@ sub write {
   if (defined $self->{count}) {
     $xfer += $output->writeFieldBegin('count', TType::I32, 4);
     $xfer += $output->writeI32($self->{count});
-    $xfer += $output->writeFieldEnd();
-  }
-  if (defined $self->{bitmasks}) {
-    $xfer += $output->writeFieldBegin('bitmasks', TType::LIST, 5);
-    {
-      $output->writeListBegin(TType::STRING, scalar(@{$self->{bitmasks}}));
-      {
-        foreach my $iter13 (@{$self->{bitmasks}}) 
-        {
-          $xfer += $output->writeString($iter13);
-        }
-      }
-      $output->writeListEnd();
-    }
     $xfer += $output->writeFieldEnd();
   }
   $xfer += $output->writeFieldStop();
@@ -1008,15 +1045,15 @@ sub read {
     {
       /^1$/ && do{      if ($ftype == TType::LIST) {
         {
-          my $_size14 = 0;
+          my $_size7 = 0;
           $self->{column_names} = [];
-          my $_etype17 = 0;
-          $xfer += $input->readListBegin(\$_etype17, \$_size14);
-          for (my $_i18 = 0; $_i18 < $_size14; ++$_i18)
+          my $_etype10 = 0;
+          $xfer += $input->readListBegin(\$_etype10, \$_size7);
+          for (my $_i11 = 0; $_i11 < $_size7; ++$_i11)
           {
-            my $elem19 = undef;
-            $xfer += $input->readString(\$elem19);
-            push(@{$self->{column_names}},$elem19);
+            my $elem12 = undef;
+            $xfer += $input->readString(\$elem12);
+            push(@{$self->{column_names}},$elem12);
           }
           $xfer += $input->readListEnd();
         }
@@ -1046,20 +1083,230 @@ sub write {
   if (defined $self->{column_names}) {
     $xfer += $output->writeFieldBegin('column_names', TType::LIST, 1);
     {
-      $output->writeListBegin(TType::STRING, scalar(@{$self->{column_names}}));
+      $xfer += $output->writeListBegin(TType::STRING, scalar(@{$self->{column_names}}));
       {
-        foreach my $iter20 (@{$self->{column_names}}) 
+        foreach my $iter13 (@{$self->{column_names}}) 
         {
-          $xfer += $output->writeString($iter20);
+          $xfer += $output->writeString($iter13);
         }
       }
-      $output->writeListEnd();
+      $xfer += $output->writeListEnd();
     }
     $xfer += $output->writeFieldEnd();
   }
   if (defined $self->{slice_range}) {
     $xfer += $output->writeFieldBegin('slice_range', TType::STRUCT, 2);
     $xfer += $self->{slice_range}->write($output);
+    $xfer += $output->writeFieldEnd();
+  }
+  $xfer += $output->writeFieldStop();
+  $xfer += $output->writeStructEnd();
+  return $xfer;
+}
+
+package Net::GenCassandra::IndexExpression;
+use base qw(Class::Accessor);
+Net::GenCassandra::IndexExpression->mk_accessors( qw( column_name op value ) );
+
+sub new {
+  my $classname = shift;
+  my $self      = {};
+  my $vals      = shift || {};
+  $self->{column_name} = undef;
+  $self->{op} = undef;
+  $self->{value} = undef;
+  if (UNIVERSAL::isa($vals,'HASH')) {
+    if (defined $vals->{column_name}) {
+      $self->{column_name} = $vals->{column_name};
+    }
+    if (defined $vals->{op}) {
+      $self->{op} = $vals->{op};
+    }
+    if (defined $vals->{value}) {
+      $self->{value} = $vals->{value};
+    }
+  }
+  return bless ($self, $classname);
+}
+
+sub getName {
+  return 'IndexExpression';
+}
+
+sub read {
+  my ($self, $input) = @_;
+  my $xfer  = 0;
+  my $fname;
+  my $ftype = 0;
+  my $fid   = 0;
+  $xfer += $input->readStructBegin(\$fname);
+  while (1) 
+  {
+    $xfer += $input->readFieldBegin(\$fname, \$ftype, \$fid);
+    if ($ftype == TType::STOP) {
+      last;
+    }
+    SWITCH: for($fid)
+    {
+      /^1$/ && do{      if ($ftype == TType::STRING) {
+        $xfer += $input->readString(\$self->{column_name});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^2$/ && do{      if ($ftype == TType::I32) {
+        $xfer += $input->readI32(\$self->{op});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^3$/ && do{      if ($ftype == TType::STRING) {
+        $xfer += $input->readString(\$self->{value});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+        $xfer += $input->skip($ftype);
+    }
+    $xfer += $input->readFieldEnd();
+  }
+  $xfer += $input->readStructEnd();
+  return $xfer;
+}
+
+sub write {
+  my ($self, $output) = @_;
+  my $xfer   = 0;
+  $xfer += $output->writeStructBegin('IndexExpression');
+  if (defined $self->{column_name}) {
+    $xfer += $output->writeFieldBegin('column_name', TType::STRING, 1);
+    $xfer += $output->writeString($self->{column_name});
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{op}) {
+    $xfer += $output->writeFieldBegin('op', TType::I32, 2);
+    $xfer += $output->writeI32($self->{op});
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{value}) {
+    $xfer += $output->writeFieldBegin('value', TType::STRING, 3);
+    $xfer += $output->writeString($self->{value});
+    $xfer += $output->writeFieldEnd();
+  }
+  $xfer += $output->writeFieldStop();
+  $xfer += $output->writeStructEnd();
+  return $xfer;
+}
+
+package Net::GenCassandra::IndexClause;
+use base qw(Class::Accessor);
+Net::GenCassandra::IndexClause->mk_accessors( qw( expressions start_key count ) );
+
+sub new {
+  my $classname = shift;
+  my $self      = {};
+  my $vals      = shift || {};
+  $self->{expressions} = undef;
+  $self->{start_key} = undef;
+  $self->{count} = 100;
+  if (UNIVERSAL::isa($vals,'HASH')) {
+    if (defined $vals->{expressions}) {
+      $self->{expressions} = $vals->{expressions};
+    }
+    if (defined $vals->{start_key}) {
+      $self->{start_key} = $vals->{start_key};
+    }
+    if (defined $vals->{count}) {
+      $self->{count} = $vals->{count};
+    }
+  }
+  return bless ($self, $classname);
+}
+
+sub getName {
+  return 'IndexClause';
+}
+
+sub read {
+  my ($self, $input) = @_;
+  my $xfer  = 0;
+  my $fname;
+  my $ftype = 0;
+  my $fid   = 0;
+  $xfer += $input->readStructBegin(\$fname);
+  while (1) 
+  {
+    $xfer += $input->readFieldBegin(\$fname, \$ftype, \$fid);
+    if ($ftype == TType::STOP) {
+      last;
+    }
+    SWITCH: for($fid)
+    {
+      /^1$/ && do{      if ($ftype == TType::LIST) {
+        {
+          my $_size14 = 0;
+          $self->{expressions} = [];
+          my $_etype17 = 0;
+          $xfer += $input->readListBegin(\$_etype17, \$_size14);
+          for (my $_i18 = 0; $_i18 < $_size14; ++$_i18)
+          {
+            my $elem19 = undef;
+            $elem19 = new Net::GenCassandra::IndexExpression();
+            $xfer += $elem19->read($input);
+            push(@{$self->{expressions}},$elem19);
+          }
+          $xfer += $input->readListEnd();
+        }
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^2$/ && do{      if ($ftype == TType::STRING) {
+        $xfer += $input->readString(\$self->{start_key});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^3$/ && do{      if ($ftype == TType::I32) {
+        $xfer += $input->readI32(\$self->{count});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+        $xfer += $input->skip($ftype);
+    }
+    $xfer += $input->readFieldEnd();
+  }
+  $xfer += $input->readStructEnd();
+  return $xfer;
+}
+
+sub write {
+  my ($self, $output) = @_;
+  my $xfer   = 0;
+  $xfer += $output->writeStructBegin('IndexClause');
+  if (defined $self->{expressions}) {
+    $xfer += $output->writeFieldBegin('expressions', TType::LIST, 1);
+    {
+      $xfer += $output->writeListBegin(TType::STRUCT, scalar(@{$self->{expressions}}));
+      {
+        foreach my $iter20 (@{$self->{expressions}}) 
+        {
+          $xfer += ${iter20}->write($output);
+        }
+      }
+      $xfer += $output->writeListEnd();
+    }
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{start_key}) {
+    $xfer += $output->writeFieldBegin('start_key', TType::STRING, 2);
+    $xfer += $output->writeString($self->{start_key});
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{count}) {
+    $xfer += $output->writeFieldBegin('count', TType::I32, 3);
+    $xfer += $output->writeI32($self->{count});
     $xfer += $output->writeFieldEnd();
   }
   $xfer += $output->writeFieldStop();
@@ -1276,15 +1523,94 @@ sub write {
   if (defined $self->{columns}) {
     $xfer += $output->writeFieldBegin('columns', TType::LIST, 2);
     {
-      $output->writeListBegin(TType::STRUCT, scalar(@{$self->{columns}}));
+      $xfer += $output->writeListBegin(TType::STRUCT, scalar(@{$self->{columns}}));
       {
         foreach my $iter27 (@{$self->{columns}}) 
         {
           $xfer += ${iter27}->write($output);
         }
       }
-      $output->writeListEnd();
+      $xfer += $output->writeListEnd();
     }
+    $xfer += $output->writeFieldEnd();
+  }
+  $xfer += $output->writeFieldStop();
+  $xfer += $output->writeStructEnd();
+  return $xfer;
+}
+
+package Net::GenCassandra::KeyCount;
+use base qw(Class::Accessor);
+Net::GenCassandra::KeyCount->mk_accessors( qw( key count ) );
+
+sub new {
+  my $classname = shift;
+  my $self      = {};
+  my $vals      = shift || {};
+  $self->{key} = undef;
+  $self->{count} = undef;
+  if (UNIVERSAL::isa($vals,'HASH')) {
+    if (defined $vals->{key}) {
+      $self->{key} = $vals->{key};
+    }
+    if (defined $vals->{count}) {
+      $self->{count} = $vals->{count};
+    }
+  }
+  return bless ($self, $classname);
+}
+
+sub getName {
+  return 'KeyCount';
+}
+
+sub read {
+  my ($self, $input) = @_;
+  my $xfer  = 0;
+  my $fname;
+  my $ftype = 0;
+  my $fid   = 0;
+  $xfer += $input->readStructBegin(\$fname);
+  while (1) 
+  {
+    $xfer += $input->readFieldBegin(\$fname, \$ftype, \$fid);
+    if ($ftype == TType::STOP) {
+      last;
+    }
+    SWITCH: for($fid)
+    {
+      /^1$/ && do{      if ($ftype == TType::STRING) {
+        $xfer += $input->readString(\$self->{key});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^2$/ && do{      if ($ftype == TType::I32) {
+        $xfer += $input->readI32(\$self->{count});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+        $xfer += $input->skip($ftype);
+    }
+    $xfer += $input->readFieldEnd();
+  }
+  $xfer += $input->readStructEnd();
+  return $xfer;
+}
+
+sub write {
+  my ($self, $output) = @_;
+  my $xfer   = 0;
+  $xfer += $output->writeStructBegin('KeyCount');
+  if (defined $self->{key}) {
+    $xfer += $output->writeFieldBegin('key', TType::STRING, 1);
+    $xfer += $output->writeString($self->{key});
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{count}) {
+    $xfer += $output->writeFieldBegin('count', TType::I32, 2);
+    $xfer += $output->writeI32($self->{count});
     $xfer += $output->writeFieldEnd();
   }
   $xfer += $output->writeFieldStop();
@@ -1294,18 +1620,18 @@ sub write {
 
 package Net::GenCassandra::Deletion;
 use base qw(Class::Accessor);
-Net::GenCassandra::Deletion->mk_accessors( qw( timestamp super_column predicate ) );
+Net::GenCassandra::Deletion->mk_accessors( qw( clock super_column predicate ) );
 
 sub new {
   my $classname = shift;
   my $self      = {};
   my $vals      = shift || {};
-  $self->{timestamp} = undef;
+  $self->{clock} = undef;
   $self->{super_column} = undef;
   $self->{predicate} = undef;
   if (UNIVERSAL::isa($vals,'HASH')) {
-    if (defined $vals->{timestamp}) {
-      $self->{timestamp} = $vals->{timestamp};
+    if (defined $vals->{clock}) {
+      $self->{clock} = $vals->{clock};
     }
     if (defined $vals->{super_column}) {
       $self->{super_column} = $vals->{super_column};
@@ -1336,8 +1662,9 @@ sub read {
     }
     SWITCH: for($fid)
     {
-      /^1$/ && do{      if ($ftype == TType::I64) {
-        $xfer += $input->readI64(\$self->{timestamp});
+      /^1$/ && do{      if ($ftype == TType::STRUCT) {
+        $self->{clock} = new Net::GenCassandra::Clock();
+        $xfer += $self->{clock}->read($input);
       } else {
         $xfer += $input->skip($ftype);
       }
@@ -1367,9 +1694,9 @@ sub write {
   my ($self, $output) = @_;
   my $xfer   = 0;
   $xfer += $output->writeStructBegin('Deletion');
-  if (defined $self->{timestamp}) {
-    $xfer += $output->writeFieldBegin('timestamp', TType::I64, 1);
-    $xfer += $output->writeI64($self->{timestamp});
+  if (defined $self->{clock}) {
+    $xfer += $output->writeFieldBegin('clock', TType::STRUCT, 1);
+    $xfer += $self->{clock}->write($output);
     $xfer += $output->writeFieldEnd();
   }
   if (defined $self->{super_column}) {
@@ -1567,14 +1894,14 @@ sub write {
   if (defined $self->{endpoints}) {
     $xfer += $output->writeFieldBegin('endpoints', TType::LIST, 3);
     {
-      $output->writeListBegin(TType::STRING, scalar(@{$self->{endpoints}}));
+      $xfer += $output->writeListBegin(TType::STRING, scalar(@{$self->{endpoints}}));
       {
         foreach my $iter34 (@{$self->{endpoints}}) 
         {
           $xfer += $output->writeString($iter34);
         }
       }
-      $output->writeListEnd();
+      $xfer += $output->writeListEnd();
     }
     $xfer += $output->writeFieldEnd();
   }
@@ -1655,7 +1982,7 @@ sub write {
   if (defined $self->{credentials}) {
     $xfer += $output->writeFieldBegin('credentials', TType::MAP, 1);
     {
-      $output->writeMapBegin(TType::STRING, TType::STRING, scalar(keys %{$self->{credentials}}));
+      $xfer += $output->writeMapBegin(TType::STRING, TType::STRING, scalar(keys %{$self->{credentials}}));
       {
         while( my ($kiter42,$viter43) = each %{$self->{credentials}}) 
         {
@@ -1663,8 +1990,117 @@ sub write {
           $xfer += $output->writeString($viter43);
         }
       }
-      $output->writeMapEnd();
+      $xfer += $output->writeMapEnd();
     }
+    $xfer += $output->writeFieldEnd();
+  }
+  $xfer += $output->writeFieldStop();
+  $xfer += $output->writeStructEnd();
+  return $xfer;
+}
+
+package Net::GenCassandra::ColumnDef;
+use base qw(Class::Accessor);
+Net::GenCassandra::ColumnDef->mk_accessors( qw( name validation_class index_type index_name ) );
+
+sub new {
+  my $classname = shift;
+  my $self      = {};
+  my $vals      = shift || {};
+  $self->{name} = undef;
+  $self->{validation_class} = undef;
+  $self->{index_type} = undef;
+  $self->{index_name} = undef;
+  if (UNIVERSAL::isa($vals,'HASH')) {
+    if (defined $vals->{name}) {
+      $self->{name} = $vals->{name};
+    }
+    if (defined $vals->{validation_class}) {
+      $self->{validation_class} = $vals->{validation_class};
+    }
+    if (defined $vals->{index_type}) {
+      $self->{index_type} = $vals->{index_type};
+    }
+    if (defined $vals->{index_name}) {
+      $self->{index_name} = $vals->{index_name};
+    }
+  }
+  return bless ($self, $classname);
+}
+
+sub getName {
+  return 'ColumnDef';
+}
+
+sub read {
+  my ($self, $input) = @_;
+  my $xfer  = 0;
+  my $fname;
+  my $ftype = 0;
+  my $fid   = 0;
+  $xfer += $input->readStructBegin(\$fname);
+  while (1) 
+  {
+    $xfer += $input->readFieldBegin(\$fname, \$ftype, \$fid);
+    if ($ftype == TType::STOP) {
+      last;
+    }
+    SWITCH: for($fid)
+    {
+      /^1$/ && do{      if ($ftype == TType::STRING) {
+        $xfer += $input->readString(\$self->{name});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^2$/ && do{      if ($ftype == TType::STRING) {
+        $xfer += $input->readString(\$self->{validation_class});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^3$/ && do{      if ($ftype == TType::I32) {
+        $xfer += $input->readI32(\$self->{index_type});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^4$/ && do{      if ($ftype == TType::STRING) {
+        $xfer += $input->readString(\$self->{index_name});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+        $xfer += $input->skip($ftype);
+    }
+    $xfer += $input->readFieldEnd();
+  }
+  $xfer += $input->readStructEnd();
+  return $xfer;
+}
+
+sub write {
+  my ($self, $output) = @_;
+  my $xfer   = 0;
+  $xfer += $output->writeStructBegin('ColumnDef');
+  if (defined $self->{name}) {
+    $xfer += $output->writeFieldBegin('name', TType::STRING, 1);
+    $xfer += $output->writeString($self->{name});
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{validation_class}) {
+    $xfer += $output->writeFieldBegin('validation_class', TType::STRING, 2);
+    $xfer += $output->writeString($self->{validation_class});
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{index_type}) {
+    $xfer += $output->writeFieldBegin('index_type', TType::I32, 3);
+    $xfer += $output->writeI32($self->{index_type});
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{index_name}) {
+    $xfer += $output->writeFieldBegin('index_name', TType::STRING, 4);
+    $xfer += $output->writeString($self->{index_name});
     $xfer += $output->writeFieldEnd();
   }
   $xfer += $output->writeFieldStop();
@@ -1674,24 +2110,29 @@ sub write {
 
 package Net::GenCassandra::CfDef;
 use base qw(Class::Accessor);
-Net::GenCassandra::CfDef->mk_accessors( qw( table name column_type comparator_type subcomparator_type comment row_cache_size preload_row_cache key_cache_size ) );
+Net::GenCassandra::CfDef->mk_accessors( qw( keyspace name column_type clock_type comparator_type subcomparator_type reconciler comment row_cache_size preload_row_cache key_cache_size read_repair_chance column_metadata gc_grace_seconds ) );
 
 sub new {
   my $classname = shift;
   my $self      = {};
   my $vals      = shift || {};
-  $self->{table} = undef;
+  $self->{keyspace} = undef;
   $self->{name} = undef;
   $self->{column_type} = "Standard";
+  $self->{clock_type} = "Timestamp";
   $self->{comparator_type} = "BytesType";
   $self->{subcomparator_type} = "";
+  $self->{reconciler} = "";
   $self->{comment} = "";
   $self->{row_cache_size} = 0;
   $self->{preload_row_cache} = 0;
   $self->{key_cache_size} = 200000;
+  $self->{read_repair_chance} = 1;
+  $self->{column_metadata} = undef;
+  $self->{gc_grace_seconds} = undef;
   if (UNIVERSAL::isa($vals,'HASH')) {
-    if (defined $vals->{table}) {
-      $self->{table} = $vals->{table};
+    if (defined $vals->{keyspace}) {
+      $self->{keyspace} = $vals->{keyspace};
     }
     if (defined $vals->{name}) {
       $self->{name} = $vals->{name};
@@ -1699,11 +2140,17 @@ sub new {
     if (defined $vals->{column_type}) {
       $self->{column_type} = $vals->{column_type};
     }
+    if (defined $vals->{clock_type}) {
+      $self->{clock_type} = $vals->{clock_type};
+    }
     if (defined $vals->{comparator_type}) {
       $self->{comparator_type} = $vals->{comparator_type};
     }
     if (defined $vals->{subcomparator_type}) {
       $self->{subcomparator_type} = $vals->{subcomparator_type};
+    }
+    if (defined $vals->{reconciler}) {
+      $self->{reconciler} = $vals->{reconciler};
     }
     if (defined $vals->{comment}) {
       $self->{comment} = $vals->{comment};
@@ -1716,6 +2163,15 @@ sub new {
     }
     if (defined $vals->{key_cache_size}) {
       $self->{key_cache_size} = $vals->{key_cache_size};
+    }
+    if (defined $vals->{read_repair_chance}) {
+      $self->{read_repair_chance} = $vals->{read_repair_chance};
+    }
+    if (defined $vals->{column_metadata}) {
+      $self->{column_metadata} = $vals->{column_metadata};
+    }
+    if (defined $vals->{gc_grace_seconds}) {
+      $self->{gc_grace_seconds} = $vals->{gc_grace_seconds};
     }
   }
   return bless ($self, $classname);
@@ -1741,7 +2197,7 @@ sub read {
     SWITCH: for($fid)
     {
       /^1$/ && do{      if ($ftype == TType::STRING) {
-        $xfer += $input->readString(\$self->{table});
+        $xfer += $input->readString(\$self->{keyspace});
       } else {
         $xfer += $input->skip($ftype);
       }
@@ -1759,37 +2215,80 @@ sub read {
       }
       last; };
       /^4$/ && do{      if ($ftype == TType::STRING) {
-        $xfer += $input->readString(\$self->{comparator_type});
+        $xfer += $input->readString(\$self->{clock_type});
       } else {
         $xfer += $input->skip($ftype);
       }
       last; };
       /^5$/ && do{      if ($ftype == TType::STRING) {
-        $xfer += $input->readString(\$self->{subcomparator_type});
+        $xfer += $input->readString(\$self->{comparator_type});
       } else {
         $xfer += $input->skip($ftype);
       }
       last; };
       /^6$/ && do{      if ($ftype == TType::STRING) {
+        $xfer += $input->readString(\$self->{subcomparator_type});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^7$/ && do{      if ($ftype == TType::STRING) {
+        $xfer += $input->readString(\$self->{reconciler});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^8$/ && do{      if ($ftype == TType::STRING) {
         $xfer += $input->readString(\$self->{comment});
       } else {
         $xfer += $input->skip($ftype);
       }
       last; };
-      /^7$/ && do{      if ($ftype == TType::DOUBLE) {
+      /^9$/ && do{      if ($ftype == TType::DOUBLE) {
         $xfer += $input->readDouble(\$self->{row_cache_size});
       } else {
         $xfer += $input->skip($ftype);
       }
       last; };
-      /^8$/ && do{      if ($ftype == TType::BOOL) {
+      /^10$/ && do{      if ($ftype == TType::BOOL) {
         $xfer += $input->readBool(\$self->{preload_row_cache});
       } else {
         $xfer += $input->skip($ftype);
       }
       last; };
-      /^9$/ && do{      if ($ftype == TType::DOUBLE) {
+      /^11$/ && do{      if ($ftype == TType::DOUBLE) {
         $xfer += $input->readDouble(\$self->{key_cache_size});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^12$/ && do{      if ($ftype == TType::DOUBLE) {
+        $xfer += $input->readDouble(\$self->{read_repair_chance});
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^13$/ && do{      if ($ftype == TType::LIST) {
+        {
+          my $_size44 = 0;
+          $self->{column_metadata} = [];
+          my $_etype47 = 0;
+          $xfer += $input->readListBegin(\$_etype47, \$_size44);
+          for (my $_i48 = 0; $_i48 < $_size44; ++$_i48)
+          {
+            my $elem49 = undef;
+            $elem49 = new Net::GenCassandra::ColumnDef();
+            $xfer += $elem49->read($input);
+            push(@{$self->{column_metadata}},$elem49);
+          }
+          $xfer += $input->readListEnd();
+        }
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^14$/ && do{      if ($ftype == TType::I32) {
+        $xfer += $input->readI32(\$self->{gc_grace_seconds});
       } else {
         $xfer += $input->skip($ftype);
       }
@@ -1806,9 +2305,9 @@ sub write {
   my ($self, $output) = @_;
   my $xfer   = 0;
   $xfer += $output->writeStructBegin('CfDef');
-  if (defined $self->{table}) {
-    $xfer += $output->writeFieldBegin('table', TType::STRING, 1);
-    $xfer += $output->writeString($self->{table});
+  if (defined $self->{keyspace}) {
+    $xfer += $output->writeFieldBegin('keyspace', TType::STRING, 1);
+    $xfer += $output->writeString($self->{keyspace});
     $xfer += $output->writeFieldEnd();
   }
   if (defined $self->{name}) {
@@ -1821,34 +2320,68 @@ sub write {
     $xfer += $output->writeString($self->{column_type});
     $xfer += $output->writeFieldEnd();
   }
+  if (defined $self->{clock_type}) {
+    $xfer += $output->writeFieldBegin('clock_type', TType::STRING, 4);
+    $xfer += $output->writeString($self->{clock_type});
+    $xfer += $output->writeFieldEnd();
+  }
   if (defined $self->{comparator_type}) {
-    $xfer += $output->writeFieldBegin('comparator_type', TType::STRING, 4);
+    $xfer += $output->writeFieldBegin('comparator_type', TType::STRING, 5);
     $xfer += $output->writeString($self->{comparator_type});
     $xfer += $output->writeFieldEnd();
   }
   if (defined $self->{subcomparator_type}) {
-    $xfer += $output->writeFieldBegin('subcomparator_type', TType::STRING, 5);
+    $xfer += $output->writeFieldBegin('subcomparator_type', TType::STRING, 6);
     $xfer += $output->writeString($self->{subcomparator_type});
     $xfer += $output->writeFieldEnd();
   }
+  if (defined $self->{reconciler}) {
+    $xfer += $output->writeFieldBegin('reconciler', TType::STRING, 7);
+    $xfer += $output->writeString($self->{reconciler});
+    $xfer += $output->writeFieldEnd();
+  }
   if (defined $self->{comment}) {
-    $xfer += $output->writeFieldBegin('comment', TType::STRING, 6);
+    $xfer += $output->writeFieldBegin('comment', TType::STRING, 8);
     $xfer += $output->writeString($self->{comment});
     $xfer += $output->writeFieldEnd();
   }
   if (defined $self->{row_cache_size}) {
-    $xfer += $output->writeFieldBegin('row_cache_size', TType::DOUBLE, 7);
+    $xfer += $output->writeFieldBegin('row_cache_size', TType::DOUBLE, 9);
     $xfer += $output->writeDouble($self->{row_cache_size});
     $xfer += $output->writeFieldEnd();
   }
   if (defined $self->{preload_row_cache}) {
-    $xfer += $output->writeFieldBegin('preload_row_cache', TType::BOOL, 8);
+    $xfer += $output->writeFieldBegin('preload_row_cache', TType::BOOL, 10);
     $xfer += $output->writeBool($self->{preload_row_cache});
     $xfer += $output->writeFieldEnd();
   }
   if (defined $self->{key_cache_size}) {
-    $xfer += $output->writeFieldBegin('key_cache_size', TType::DOUBLE, 9);
+    $xfer += $output->writeFieldBegin('key_cache_size', TType::DOUBLE, 11);
     $xfer += $output->writeDouble($self->{key_cache_size});
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{read_repair_chance}) {
+    $xfer += $output->writeFieldBegin('read_repair_chance', TType::DOUBLE, 12);
+    $xfer += $output->writeDouble($self->{read_repair_chance});
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{column_metadata}) {
+    $xfer += $output->writeFieldBegin('column_metadata', TType::LIST, 13);
+    {
+      $xfer += $output->writeListBegin(TType::STRUCT, scalar(@{$self->{column_metadata}}));
+      {
+        foreach my $iter50 (@{$self->{column_metadata}}) 
+        {
+          $xfer += ${iter50}->write($output);
+        }
+      }
+      $xfer += $output->writeListEnd();
+    }
+    $xfer += $output->writeFieldEnd();
+  }
+  if (defined $self->{gc_grace_seconds}) {
+    $xfer += $output->writeFieldBegin('gc_grace_seconds', TType::I32, 14);
+    $xfer += $output->writeI32($self->{gc_grace_seconds});
     $xfer += $output->writeFieldEnd();
   }
   $xfer += $output->writeFieldStop();
@@ -1858,7 +2391,7 @@ sub write {
 
 package Net::GenCassandra::KsDef;
 use base qw(Class::Accessor);
-Net::GenCassandra::KsDef->mk_accessors( qw( name strategy_class replication_factor cf_defs ) );
+Net::GenCassandra::KsDef->mk_accessors( qw( name strategy_class strategy_options replication_factor cf_defs ) );
 
 sub new {
   my $classname = shift;
@@ -1866,6 +2399,7 @@ sub new {
   my $vals      = shift || {};
   $self->{name} = undef;
   $self->{strategy_class} = undef;
+  $self->{strategy_options} = undef;
   $self->{replication_factor} = undef;
   $self->{cf_defs} = undef;
   if (UNIVERSAL::isa($vals,'HASH')) {
@@ -1874,6 +2408,9 @@ sub new {
     }
     if (defined $vals->{strategy_class}) {
       $self->{strategy_class} = $vals->{strategy_class};
+    }
+    if (defined $vals->{strategy_options}) {
+      $self->{strategy_options} = $vals->{strategy_options};
     }
     if (defined $vals->{replication_factor}) {
       $self->{replication_factor} = $vals->{replication_factor};
@@ -1916,7 +2453,28 @@ sub read {
         $xfer += $input->skip($ftype);
       }
       last; };
-      /^3$/ && do{      if ($ftype == TType::I32) {
+      /^3$/ && do{      if ($ftype == TType::MAP) {
+        {
+          my $_size51 = 0;
+          $self->{strategy_options} = {};
+          my $_ktype52 = 0;
+          my $_vtype53 = 0;
+          $xfer += $input->readMapBegin(\$_ktype52, \$_vtype53, \$_size51);
+          for (my $_i55 = 0; $_i55 < $_size51; ++$_i55)
+          {
+            my $key56 = '';
+            my $val57 = '';
+            $xfer += $input->readString(\$key56);
+            $xfer += $input->readString(\$val57);
+            $self->{strategy_options}->{$key56} = $val57;
+          }
+          $xfer += $input->readMapEnd();
+        }
+      } else {
+        $xfer += $input->skip($ftype);
+      }
+      last; };
+      /^4$/ && do{      if ($ftype == TType::I32) {
         $xfer += $input->readI32(\$self->{replication_factor});
       } else {
         $xfer += $input->skip($ftype);
@@ -1924,16 +2482,16 @@ sub read {
       last; };
       /^5$/ && do{      if ($ftype == TType::LIST) {
         {
-          my $_size44 = 0;
+          my $_size58 = 0;
           $self->{cf_defs} = [];
-          my $_etype47 = 0;
-          $xfer += $input->readListBegin(\$_etype47, \$_size44);
-          for (my $_i48 = 0; $_i48 < $_size44; ++$_i48)
+          my $_etype61 = 0;
+          $xfer += $input->readListBegin(\$_etype61, \$_size58);
+          for (my $_i62 = 0; $_i62 < $_size58; ++$_i62)
           {
-            my $elem49 = undef;
-            $elem49 = new Net::GenCassandra::CfDef();
-            $xfer += $elem49->read($input);
-            push(@{$self->{cf_defs}},$elem49);
+            my $elem63 = undef;
+            $elem63 = new Net::GenCassandra::CfDef();
+            $xfer += $elem63->read($input);
+            push(@{$self->{cf_defs}},$elem63);
           }
           $xfer += $input->readListEnd();
         }
@@ -1963,22 +2521,37 @@ sub write {
     $xfer += $output->writeString($self->{strategy_class});
     $xfer += $output->writeFieldEnd();
   }
+  if (defined $self->{strategy_options}) {
+    $xfer += $output->writeFieldBegin('strategy_options', TType::MAP, 3);
+    {
+      $xfer += $output->writeMapBegin(TType::STRING, TType::STRING, scalar(keys %{$self->{strategy_options}}));
+      {
+        while( my ($kiter64,$viter65) = each %{$self->{strategy_options}}) 
+        {
+          $xfer += $output->writeString($kiter64);
+          $xfer += $output->writeString($viter65);
+        }
+      }
+      $xfer += $output->writeMapEnd();
+    }
+    $xfer += $output->writeFieldEnd();
+  }
   if (defined $self->{replication_factor}) {
-    $xfer += $output->writeFieldBegin('replication_factor', TType::I32, 3);
+    $xfer += $output->writeFieldBegin('replication_factor', TType::I32, 4);
     $xfer += $output->writeI32($self->{replication_factor});
     $xfer += $output->writeFieldEnd();
   }
   if (defined $self->{cf_defs}) {
     $xfer += $output->writeFieldBegin('cf_defs', TType::LIST, 5);
     {
-      $output->writeListBegin(TType::STRUCT, scalar(@{$self->{cf_defs}}));
+      $xfer += $output->writeListBegin(TType::STRUCT, scalar(@{$self->{cf_defs}}));
       {
-        foreach my $iter50 (@{$self->{cf_defs}}) 
+        foreach my $iter66 (@{$self->{cf_defs}}) 
         {
-          $xfer += ${iter50}->write($output);
+          $xfer += ${iter66}->write($output);
         }
       }
-      $output->writeListEnd();
+      $xfer += $output->writeListEnd();
     }
     $xfer += $output->writeFieldEnd();
   }
