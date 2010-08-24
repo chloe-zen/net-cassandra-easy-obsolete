@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 
-use lib './lib';
+use if (-d 'blib') => 'blib';
 
 use Data::Dumper;
 use Sys::Hostname;
