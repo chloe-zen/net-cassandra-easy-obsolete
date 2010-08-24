@@ -3,8 +3,6 @@
 package Net::Cassandra::Easy;
 
 use Moose;
-use warnings;
-use strict;
 
 use constant 1.01;                      # don't omit this! needed for resolving the AccessLevel constants
 
@@ -21,14 +19,34 @@ use Net::GenCassandra::Constants;
 use Net::GenThrift::Thrift::Socket;
 use Net::GenThrift::Thrift::BinaryProtocol;
 use Net::GenThrift::Thrift::FramedTransport;
-use Net::GenThrift::Thrift::BufferedTransport;
+#use Net::GenThrift::Thrift::BufferedTransport;
 
-our $VERSION = "0.15";
+use namespace::clean;
+
+our $VERSION = "0.1501";
+
+use constant THRIFT_MAX => 100;
 
 our $DEBUG = 0;
 our $QUIET = 0;
 
-use constant THRIFT_MAX => 100;
+# How to make timestamps most efficiently depends on characteristics of Perl:
+#   is pure math OK (e.g. IEEE 754 64-bit format) or not (e.g. Alpha)?
+# We choose at runtime because, being a pure-Perl module, the version of Perl may change
+#   between installation and runtime.
+# The build_timestamp function is designed to be passed the return value of gettimeday.
+BEGIN {
+    my $t = time + 31536000;  # one year
+    my $ts = $t * 1_000_000 + 999_999;
+    my $ok =     int( $ts      / 1_000_000) == $t
+              && int(($ts + 1) / 1_000_000) == $t + 1
+              && ($ts + 1) != $ts
+              && ($ts - 1) != $ts;
+    warn __PACKAGE__.": USING FAST TIMESTAMPS\n" if $ok;
+    *_build_timestamp = $ok
+                  ? sub { @_ or @_ = gettimeofday; $_[0] * 1_000_000 + $_[1] }
+                  : sub { @_ or @_ = gettimeofday; sprintf '%d%0.6d', @_ };
+}
 
 # plain options, required for construction
 has server      => ( is => 'ro', isa => 'Str', required => 1 );
@@ -42,17 +60,7 @@ has send_timeout => ( is => 'ro', isa => 'Int',     default => 1000 );
 has recv_buffer  => ( is => 'ro', isa => 'Int',     default => 1024 );
 has send_buffer  => ( is => 'ro', isa => 'Int',     default => 1024 );
 has max_results  => ( is => 'ro', isa => 'Int',     default => THRIFT_MAX );
-
-has timestamp    => (
-                     is => 'ro', isa => 'CodeRef',
-                     default => sub
-                     {
-                         sub
-                         {
-                             return sprintf "%d%0.6d", gettimeofday();
-                         }
-                     }
-                    );
+has timestamp    => ( is => 'ro', isa => 'CodeRef', default => sub { \&_build_timestamp } );
 
 # read and write consistency can be changed on the fly
 has read_consistency  => ( is => 'rw', isa => 'Int', default => Net::GenCassandra::ConsistencyLevel::ONE );
@@ -61,13 +69,19 @@ has write_consistency => ( is => 'rw', isa => 'Int', default => Net::GenCassandr
 # internals
 has socket    => (is => 'rw', isa => 'Net::GenThrift::Thrift::Socket');
 has protocol  => (is => 'rw', isa => 'Net::GenThrift::Thrift::BinaryProtocol');
+has transport => (is => 'rw', isa => 'Net::GenThrift::Thrift::Transport');
 has client    => (is => 'rw', isa => 'Net::GenCassandra::CassandraClient');
-has transport => (is => 'rw', isa => 'Net::GenThrift::Thrift::BufferedTransport');
 has opened    => (is => 'rw', isa => 'Bool');
 
 # use constant GRAMMAR_SPECIAL => 'special';
 # use constant GRAMMAR_EXACT   => 'exact';
 # use constant GRAMMAR_ALL     => 'ALL';
+
+sub new_clock
+{
+    shift;
+    Net::GenCassandra::Clock->new({ timestamp => _build_timestamp(@_) })
+}
 
 our $last_predicate = Net::GenCassandra::SlicePredicate->new({
                                                               slice_range => Net::GenCassandra::SliceRange->new({start=> '' , finish=> '', reversed => 1, count => 1}),
@@ -212,6 +226,7 @@ sub validate_mutations
     my $rows   = shift @_;
     my $family = shift @_;
     my $info   = shift @_;
+    my $clock  = shift @_;
 
     my $d = $spec->{deletions};
     my $i = $spec->{insertions};
@@ -233,13 +248,15 @@ sub validate_mutations
 
         if ($cols)
         {
+            $clock //= $self->new_clock;
+
             foreach my $row (@$rows)
             {
                 my @mutes = map {
                     Net::GenCassandra::Mutation->new({
                                                       deletion => Net::GenCassandra::Deletion->new({
                                                                                                     $standard ? (predicate => $predicate) : (super_column => $_),
-                                                                                                    timestamp => $self->timestamp()->(),
+                                                                                                    clock => $clock,
                                                                                                    }),
                                                      }),
                                                  } @$cols;
@@ -256,6 +273,8 @@ sub validate_mutations
     if ($i)
     {
         validate_hash($i, 'insertions (as hash)', $info);
+
+        $clock //= $self->new_clock;
 
         my $super_mode = ref ((values %$i)[0]) eq 'HASH';
 
@@ -274,7 +293,7 @@ sub validate_mutations
                         Net::GenCassandra::Column->new({
                                                         name=> $_,
                                                         value=> $sc_spec->{$_},
-                                                        timestamp => $self->timestamp()->(),
+                                                        clock => $clock,
                                                        }),
                                                    } keys %$sc_spec;
 
@@ -337,7 +356,7 @@ sub mutate
 
     validate_family($family, $info);
 
-    my $mutation_map = $self->validate_mutations(\%spec, $rows, $family, $info);
+    my $mutation_map = $self->validate_mutations(\%spec, $rows, $family, $info, undef);
 
     if ($DEBUG)
     {
@@ -760,7 +779,7 @@ sub connect
         $self->socket(Net::GenThrift::Thrift::Socket->new($self->server(), $self->port()));
         $self->socket()->setSendTimeout($self->send_timeout());
         $self->socket()->setRecvTimeout($self->recv_timeout());
-        $self->transport(Net::GenThrift::Thrift::BufferedTransport->new($self->socket(), $self->send_buffer(), $self->recv_buffer()));
+        $self->transport(Net::GenThrift::Thrift::FramedTransport->new($self->socket(), $self->send_buffer(), $self->recv_buffer()));
         $self->protocol(Net::GenThrift::Thrift::BinaryProtocol->new($self->transport()));
         $self->client(Net::GenCassandra::CassandraClient->new($self->protocol()));
 
