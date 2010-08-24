@@ -17,6 +17,7 @@ WriteMakefile(
 	       'Term::ReadLine'            => '0',
 	       'Hash::Merge'               => '0',
 	       'Modern::Perl'              => '0',
+	       'namespace::clean'          => '0',
 	      },
               EXE_FILES => [ 'cassidy.pl' ],
 	     );
