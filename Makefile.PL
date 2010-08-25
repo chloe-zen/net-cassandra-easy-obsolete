@@ -11,6 +11,7 @@ WriteMakefile(
 	      PREREQ_PM    =>
 	      {
 	       'Moose'                     => '0',
+	       'MooseX::UndefTolerant'     => '0',
 	       'Class::Accessor'           => '0',
 	       'Bit::Vector'               => '0',
 	       'Time::HiRes'               => '0',
