@@ -44,7 +44,7 @@ BEGIN {
               && ($ts + 1) != $ts
               && ($ts - 1) != $ts;
     warn __PACKAGE__.": USING FAST TIMESTAMPS\n" if $ok;
-    *_build_timestamp = $ok
+    *_timestamp_i64 = $ok
                   ? sub { @_ or @_ = gettimeofday; $_[0] * 1_000_000 + $_[1] }
                   : sub { @_ or @_ = gettimeofday; sprintf '%d%0.6d', @_ };
 }
@@ -61,7 +61,7 @@ has send_timeout => ( is => 'ro', isa => 'Int',     default => 1000 );
 has recv_buffer  => ( is => 'ro', isa => 'Int',     default => 1024 );
 has send_buffer  => ( is => 'ro', isa => 'Int',     default => 1024 );
 has max_results  => ( is => 'ro', isa => 'Int',     default => THRIFT_MAX );
-has timestamp    => ( is => 'ro', isa => 'CodeRef', default => sub { \&_build_timestamp } );
+has timestamp    => ( is => 'ro', isa => 'CodeRef', default => sub { \&gettimeofday } );
 
 # read and write consistency can be changed on the fly
 has read_consistency  => ( is => 'rw', isa => 'Int', default => Net::GenCassandra::ConsistencyLevel::ONE );
@@ -80,8 +80,9 @@ has opened    => (is => 'rw', isa => 'Bool');
 
 sub new_clock
 {
-    shift;
-    Net::GenCassandra::Clock->new({ timestamp => _build_timestamp(@_) })
+    my $self = shift;
+    my $ts = _timestamp_i64( $self->{timestamp}->(@_) );
+    Net::GenCassandra::Clock->new({ timestamp => $ts })
 }
 
 our $last_predicate = Net::GenCassandra::SlicePredicate->new({
