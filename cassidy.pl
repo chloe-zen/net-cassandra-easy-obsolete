@@ -1,16 +1,16 @@
 #!/usr/bin/perl
+use Modern::Perl;
 
 use if (-d 'blib') => 'blib';
+use Net::Cassandra::Easy;
 
 use Data::Dumper;
 use Sys::Hostname;
-use Net::Cassandra::Easy;
 use Getopt::Long;
 use POSIX;
 use Time::HiRes qw( gettimeofday usleep );
 use Term::ReadLine;
 use Hash::Merge qw/merge/;
-use Modern::Perl;
 use Parse::RecDescent;
 
 my %options =
@@ -66,7 +66,9 @@ use constant COMMANDS => [ COMMAND_DEFINE_KEYSPACE, COMMAND_DEFINE_FAMILY, COMMA
 
 my $quiet = $Net::Cassandra::Easy::QUIET = scalar @ARGV || $options{quiet}; # be quiet if this is non-interactive or if requested
 
-my $c = Net::Cassandra::Easy->new(server => $options{server}, port => $options{port}, keyspace => $options{keyspace}, credentials => { none => 1 });;
+my $c = Net::Cassandra::Easy->new(( map { $_ => $options{$_} } qw( server port keyspace )),
+                                  # credentials => { none => 1 }
+                                 );
 $c->connect();
 #die Dumper [run_command($c, shift @ARGV)]; # I haz test
 
@@ -75,8 +77,8 @@ my @families;
 
 eval
 {
-    %families = %{$c->describe()};
-#    $families{New} = {super => 1, cmp => 'Long'};
+    my $desc = $c->describe();
+    %families = %{ $desc->{families} };
     @families = sort keys %families;
 
     foreach my $family (@families)

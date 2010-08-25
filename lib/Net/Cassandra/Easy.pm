@@ -3,6 +3,7 @@
 package Net::Cassandra::Easy;
 
 use Moose;
+use MooseX::UndefTolerant;
 
 use constant 1.01;                      # don't omit this! needed for resolving the AccessLevel constants
 
@@ -49,12 +50,12 @@ BEGIN {
 }
 
 # plain options, required for construction
-has server      => ( is => 'ro', isa => 'Str', required => 1 );
-has keyspace    => ( is => 'ro', isa => 'Str', required => 1 );
-has credentials => ( is => 'ro', isa => 'HashRef', required => 0 );
+has server      => ( is => 'ro', isa => 'Str',     required => 1 );
+has port        => ( is => 'ro', isa => 'Int',     default  => 9160 );
+has keyspace    => ( is => 'ro', isa => 'Str' );
+has credentials => ( is => 'ro', isa => 'HashRef' );
 
 # plain options with defaults
-has port         => ( is => 'ro', isa => 'Int',     default => 9160 );
 has recv_timeout => ( is => 'ro', isa => 'Int',     default => 5000 );
 has send_timeout => ( is => 'ro', isa => 'Int',     default => 1000 );
 has recv_buffer  => ( is => 'ro', isa => 'Int',     default => 1024 );
@@ -388,22 +389,19 @@ sub describe
 
     # print "Raw describe_keyspace() result is " . Dumper($d) if $DEBUG;
 
-    my $ret = {};
+    my $cf_defs = delete $d->{cf_defs} || [];
+    my $ret = { %$d, families => {} };
+    for my $cfd (@$cf_defs) {
+        $ret->{families}{$cfd->{name}} =
+          {
+           type   => $cfd->{column_type},
+           super  => $cfd->{column_type} eq 'Super',
 
-    foreach my $key (keys %$d)
-    {
-        $ret->{$key} = {
-                        super => $d->{$key}->{Type} eq 'Super',
-                        type  => $d->{$key}->{Type},
+           cmp    => parse_type($cfd->{comparator_type}),
+           subcmp => parse_type($cfd->{subcomparator_type}),
 
-                        cmp                   => parse_type($d->{$key}->{CompareWith}),
-                        subcmp                => parse_type($d->{$key}->{CompareSubcolumnsWith}),
-                        CompareWith           => $d->{$key}->{CompareWith},
-                        CompareSubcolumnsWith => $d->{$key}->{CompareSubcolumnsWith},
-
-                        sort => parse_type($d->{$key}->{Desc}),
-                        Desc => $d->{$key}->{Desc},
-                       };
+           %$cfd
+          };
     }
 
     # print "Interpreted describe_keyspace() result is " . Dumper($ret) if $DEBUG;
@@ -448,7 +446,7 @@ sub validate_configurations
                 validate_hash($deletion, 'configure.deletions.keyspacefamily (as hash)', $info);
                 foreach my $keyspace (sort keys %$deletion)
                 {
-                    push @{$out->{system_drop_column_family}}, map { [ $keyspace, $_ ] } @{$deletion->{$keyspace}};
+                    push @{$out->{system_drop_column_family}}, map { [ $_ ] } @{$deletion->{$keyspace}};
                 }
             }
             else
@@ -468,7 +466,7 @@ sub validate_configurations
             if (ref $target eq 'HASH')
             {
                 validate_hash($target, 'configure.renames.keyspacefamily (as hash)', $info);
-                push @{$out->{system_rename_column_family}}, map { [ $keyspace, $_, $target->{$_} ] } sort keys %$target;
+                push @{$out->{system_rename_column_family}}, map { [ $_, $target->{$_} ] } sort keys %$target;
             }
             else
             {
@@ -501,7 +499,7 @@ sub validate_configurations
             foreach my $family (sort keys %$families)
             {
                 my %cf_args = %{$families->{$family}};
-                $cf_args{table} = $keyspace;
+                $cf_args{keyspace} = $keyspace;
                 $cf_args{name} = $family;
                 push @cfs, Net::GenCassandra::CfDef->new(\%cf_args);
             }
@@ -785,10 +783,11 @@ sub connect
 
         $self->transport()->open();
         $self->opened(1);
-        if ($self->credentials())
+
+        $self->client()->set_keyspace($self->keyspace()) if defined $self->keyspace();
+        if (my $cred = $self->credentials())
         {
-            $self->client()->set_keyspace($self->keyspace());
-            my $level = $self->client()->login(new Net::GenCassandra::AuthenticationRequest({credentials => $self->credentials()}));
+            my $level = $self->client()->login(new Net::GenCassandra::AuthenticationRequest({credentials => $cred}));
 
             # all this because Thrift doesn't record constants it will declare
             my $name = 'unknown_access_level';
@@ -809,13 +808,17 @@ sub handle_errors
 {
     if ($@)
     {
-        if ($@->can('why'))
+        if (ref($@) && $@->can('why'))
         {
             die $@->why;
         }
+        elsif (ref($@) && $@->{why})
+        {
+            die $@->{why};
+        }
         else
         {
-            die Dumper($@) if $@;
+            die "$@  rethrown";
         }
     }
 }
