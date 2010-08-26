@@ -28,8 +28,8 @@ our $VERSION = "0.1501";
 
 use constant THRIFT_MAX => 100;
 
-our $DEBUG = 0;
-our $QUIET = 0;
+our $DEBUG;
+our $QUIET;
 
 # How to make timestamps most efficiently depends on characteristics of Perl:
 #   is pure math OK (e.g. IEEE 754 64-bit format) or not (e.g. Alpha)?
@@ -43,7 +43,7 @@ BEGIN {
               && int(($ts + 1) / 1_000_000) == $t + 1
               && ($ts + 1) != $ts
               && ($ts - 1) != $ts;
-    warn __PACKAGE__.": USING FAST TIMESTAMPS\n" if $ok;
+    warn __PACKAGE__.": USING FAST TIMESTAMPS\n" if $DEBUG;
     *_timestamp_i64 = $ok
                   ? sub { @_ or @_ = gettimeofday; $_[0] * 1_000_000 + $_[1] }
                   : sub { @_ or @_ = gettimeofday; sprintf '%d%0.6d', @_ };
