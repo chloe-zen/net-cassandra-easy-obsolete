@@ -158,7 +158,7 @@ sub validate_predicate
     {
         die "Sorry but you have to specify EXACTLY ONE of a 'byoffset' or a 'byname' or a 'bylong' key for supercolumns in $info" if $bycount != 1;
     }
-    elsif ($named) # specific column deletions
+    elsif ($named) # specifically named column
     {
         return Net::GenCassandra::SlicePredicate->new({
                                                        column_names => $named,
@@ -675,7 +675,7 @@ sub get
 
     #print "multiget_slice result = " . Dumper($result) if $DEBUG;
 
-    return simplify_result($result, $family);
+    return simplify_result($result, $family, $spec{with_clocks});
 
 }
 
@@ -684,6 +684,7 @@ sub simplify_result
 {
     my $result = shift @_;
     my $family = shift @_;
+    my $with_clocks = shift @_;
 
     if (ref $result eq 'HASH')
     {
@@ -697,7 +698,11 @@ sub simplify_result
                 {
                     if (defined $col->column()) # is this a column?
                     {
-                        $r->{$col->column()->name()} = $col->column()->value();
+                        $r->{$col->column()->name()} =
+                          $with_clocks
+                            ? { value => $col->column()->value(),
+                                timestamp => do { my $c = $col->column()->clock(); $c ? $c->timestamp() : undef } }
+                            : $col->column()->value();
                     }
                     else # this is a supercolumn, map all its columns as a (column_name, column_value) hash ref to the supercolumn name as a key
                     {
