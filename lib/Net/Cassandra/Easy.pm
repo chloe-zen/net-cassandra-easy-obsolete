@@ -293,41 +293,38 @@ sub validate_mutations
                     my @cols = map
                     {
                         Net::GenCassandra::Column->new({
-                                                        name=> $_,
-                                                        value=> $sc_spec->{$_},
-                                                        clock => $clock,
-                                                       }),
-                                                   } keys %$sc_spec;
+                            name  => $_,
+                            value => $sc_spec->{$_},
+                            clock => $clock,
+                        })
+                    } keys %$sc_spec;
 
                     my $sc = Net::GenCassandra::ColumnOrSuperColumn->new({
-                                                                          super_column => Net::GenCassandra::SuperColumn->new({
-                                                                                                                               name => $sc_name,
-                                                                                                                               columns => \@cols,
-                                                                                                                              }),
-                                                                         });
+                        super_column =>
+                            Net::GenCassandra::SuperColumn->new({
+                                name    => $sc_name,
+                                columns => \@cols,
+                            }),
+                    });
 
-                    push @{$out->{$row}->{$family}}, Net::GenCassandra::Mutation->new({
-                                                                                       column_or_supercolumn => $sc,
-                                                                                      });
+                    push @{$out->{$row}->{$family}}, Net::GenCassandra::Mutation->new({ column_or_supercolumn => $sc });
                 }
             }
             else
             {
-                my @mutes = map
+                for my $col_name (keys %$i)
                 {
-                    Net::GenCassandra::Mutation->new({
-                                                      column_or_supercolumn => 
-                                                      Net::GenCassandra::ColumnOrSuperColumn->new({
-                                                                                                   column => Net::GenCassandra::Column->new({
-                                                                                                                                             name=> $_,
-                                                                                                                                             value=> $i->{$_},
-                                                                                                                                             timestamp => $self->timestamp()->(),
-                                                                                                                                            }),
-                                                                                                  }),
-                                                     });
-                } keys %$i;
+                    my $csc = Net::GenCassandra::ColumnOrSuperColumn->new({
+                        column =>
+                            Net::GenCassandra::Column->new({
+                                name  => $col_name,
+                                value => $i->{$col_name},
+                                clock => $clock,
+                            }),
+                    });
 
-                push @{$out->{$row}->{$family}}, @mutes;
+                    push @{$out->{$row}->{$family}}, Net::GenCassandra::Mutation->new({ column_or_supercolumn => $csc })
+                }
             }
         }
     }
@@ -970,7 +967,9 @@ How do the timestamps work?
 Net::Cassandra::Easy uses microsecond-resolution timestamps (whatever
 Time::HiRes gives us, basically).  You can override the timestamps
 with the C<timestamp> initialization parameter, which takes a
-subroutine reference.
+subroutine reference.  The subroutine should return two numbers, which
+will be interpreted as seconds and microseconds.  For fancier tricks,
+you can subclass and override the new_clock method.
 
 =head2 EXPORT
 
